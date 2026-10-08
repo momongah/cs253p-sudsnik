@@ -297,7 +297,7 @@ packages/services/billing/
 
 | Seam | Weeks | Variants beyond `golden`, `hollow`, `naive` | Starter variant |
 |---|---|---|---|
-| `orders` | 1 | `cancel-noop`: cancel returns 200 and changes nothing | `cancel-noop` |
+| `orders` | 1 | `cancel-noop`: cancel returns 200 and changes nothing | `cancel` |
 | `billing` | 2, 3 | `double-charge`: no webhook dedupe of any kind; a redelivered `captured` webhook appends a second capture and publishes `charge.captured` again | `port-only`: the package holds `package.json`, `src/port.ts`, and an `src/index.ts` that exports nothing, and `billing.enabled` is off. `contracts/src/services/billing/` ships without its `v2/`: Week 2's deliverable is the package behind the contract, not the contract |
 | `washnodes` | 4 | `memory`: in-memory `HoldStore` | `memory` |
 | `dispatch` | 5, 6 | none | `naive`: synchronous fan-out and exactly-once relay ingest |

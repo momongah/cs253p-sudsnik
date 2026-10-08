@@ -1,32 +1,49 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { boot, cancel, fakeBilling, place, steps, type Stack } from "../helpers.js";
+import { boot, cancel, driveTo, fakeBilling, getOrder, place, steps, type Stack } from "../helpers.js";
 
 let stack: Stack;
+let drained = false;
 beforeEach(async () => {
   stack = await boot();
+  drained = false;
 });
-afterEach(() => stack.app.sudsnik.drain());
+afterEach(async () => {
+  if (!drained) {
+    drained = true;
+    await stack.app.sudsnik.drain();
+  }
+});
 
 describe("compensation on cancel", () => {
-  // What every variant answers; what a cancel then does to the order is the hidden suite's (`docs/system-spec.md` §8).
-  it("answers 200 with the order, and 404 for one the tenant does not own", async () => {
-    fakeBilling(stack.deps);
-    const order = await place(stack.app);
-    await new Promise((r) => setImmediate(r));
-    const res = await cancel(stack.app, order.orderId);
-    expect(res.statusCode).toBe(200);
-    expect((res.json() as { orderId: string }).orderId).toBe(order.orderId);
-    expect((await cancel(stack.app, order.orderId, "again", "op2")).statusCode).toBe(404);
-  });
-
-  // skipped: flaked after the outbox landed in 1.2, needs rewrite
-  it.skip("refunds before it records the cancellation", async () => {
+  it("cancels the order, publishes the event, and refunds an authorized payment", async () => {
     const billing = fakeBilling(stack.deps);
     const order = await place(stack.app);
-    await new Promise((r) => setImmediate(r));
-    await cancel(stack.app, order.orderId);
+    await driveTo(stack, order, "delivered");
+    const res = await cancel(stack.app, order.orderId);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ orderId: order.orderId, state: "cancelled", cancelReason: "changed my mind", payment: "refunded" });
     expect(billing.refunds).toBe(1);
-    const recorded = steps(stack.deps, order.orderId).map((s) => s.step);
-    expect(recorded.indexOf("refund")).toBeLessThan(recorded.indexOf("cancel"));
+    expect(steps(stack.deps, order.orderId).map((s) => s.step)).toEqual(["place", "authorize", "pickup.scheduled", "pod.collected", "pod.delivered", "cancel", "refund"]);
+    drained = true;
+    await stack.app.sudsnik.drain();
+    expect(stack.deps.bus.published.filter((e) => e.topic === "order.cancelled").map((e) => e.payload)).toEqual([
+      { orderId: order.orderId, reason: "changed my mind", origin: "customer", compensations: ["refund", "release-hold"] },
+    ]);
+  });
+
+  it("returns 404 when the order belongs to another tenant", async () => {
+    const order = await place(stack.app);
+    expect((await cancel(stack.app, order.orderId, "again", "op2")).statusCode).toBe(404);
+    expect((await getOrder(stack.app, order.orderId)).state).toBe("placed");
+  });
+
+  it("rejects cancellation once washing has started", async () => {
+    const order = await place(stack.app);
+    await driveTo(stack, order, "washing");
+    const res = await cancel(stack.app, order.orderId);
+    expect(res.statusCode).toBe(409);
+    expect((res.json() as { code: string }).code).toBe("CONFLICT");
+    expect((await getOrder(stack.app, order.orderId)).state).toBe("washing");
+    expect(steps(stack.deps, order.orderId).some((s) => s.step === "cancel")).toBe(false);
   });
 });

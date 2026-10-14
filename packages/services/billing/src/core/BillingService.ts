@@ -147,6 +147,6 @@ export class BillingServiceImpl {
   }
 
   private addLedger(charge: Charge, kind: LedgerEntry["kind"], amount: number): void {
-    this.db.sqlite.prepare("insert into ledger (entry_id, tenant_id, order_id, kind, amount, currency, at, ref) values (?, ?, ?, ?, ?, ?, ?, ?)").run(newId(), charge.tenantId, charge.orderId, kind, amount, charge.currency, charge.updatedAt, charge.chargeId);
+    this.db.sqlite.prepare("insert or ignore into ledger (entry_id, tenant_id, order_id, kind, amount, currency, at, ref) values (?, ?, ?, ?, ?, ?, ?, ?)").run(newId(), charge.tenantId, charge.orderId, kind, amount, charge.currency, charge.updatedAt, charge.chargeId);
   }
 }

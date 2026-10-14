@@ -19,6 +19,7 @@ create table if not exists ledger (
   at integer not null,
   ref text
 );
+create unique index if not exists ledger_effect_once on ledger (tenant_id, order_id, kind, ref);
 create table if not exists webhook_dedupe (
   webhook_id text primary key,
   tenant_id text not null,

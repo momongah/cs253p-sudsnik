@@ -15,8 +15,8 @@ export function registerRoutes(app: App, service: BillingServiceImpl): void {
     );
   }
   for (const path of paths(routes.authorize.path)) {
-    app.post(path, { schema: { headers: IdempotencyHeaders, body: routes.authorize.body, response: { 201: Charge } } }, async (req, reply) =>
-      sendResult(reply, await service.authorize(req.body.orderId, req.body.amount, req.ctx), 201),
+    app.post(path, { schema: { headers: IdempotencyHeaders, body: routes.authorize.body, response: { 200: Charge } } }, async (req, reply) =>
+      sendResult(reply, await service.authorize(req.body.orderId, req.body.amount, req.ctx)),
     );
   }
   for (const path of paths(routes.capture.path)) {

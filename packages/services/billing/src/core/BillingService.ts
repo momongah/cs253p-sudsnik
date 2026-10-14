@@ -18,8 +18,6 @@ import { err, newId, ok, sudsnikError, type Result } from "@sudsnik/kernel";
 export class BillingServiceImpl {
   private readonly currencies = new Map<string, "USD" | "EUR" | "AUD">();
   private readonly tiers = new Map<string, "standard" | "priority">();
-  private readonly cycleUnits = new Map<string, number>();
-
   constructor(private readonly db: Db, private readonly outbox: Outbox, private readonly deps: ServiceDeps) {}
 
   async quote(orderId: string, ctx: Ctx): Promise<Result<Quote>> {
@@ -101,7 +99,7 @@ export class BillingServiceImpl {
         if (!result.ok && result.error.code !== "NOT_FOUND") return result;
       } else if (envelope.topic === "wash.completed") {
         const payload = parsePayload("wash.completed", envelope.payload);
-        this.cycleUnits.set(payload.orderId, payload.cycleUnits);
+        this.db.sqlite.prepare("insert into wash_units (tenant_id, order_id, cycle_units, updated_at) values (?, ?, ?, ?) on conflict (tenant_id, order_id) do update set cycle_units = excluded.cycle_units, updated_at = excluded.updated_at").run(envelope.tenantId, payload.orderId, payload.cycleUnits, payload.completedAt);
       }
       this.db.sqlite.prepare("insert or ignore into consumed (envelope_id, topic, at) values (?, ?, ?)").run(envelope.id, envelope.topic, envelope.occurredAt);
       return ok(undefined);
@@ -117,7 +115,8 @@ export class BillingServiceImpl {
     if (!charge.paymentRef) return err(sudsnikError("CONFLICT", `charge for order ${orderId} has no payment reference`));
     const currency = charge.currency as "USD" | "EUR" | "AUD";
     const tier = this.tiers.get(ctx.tenantId) ?? "standard";
-    const units = this.cycleUnits.get(orderId) ?? EXPECTED_CYCLE_UNITS;
+    const unitsRow = this.db.sqlite.prepare("select cycle_units from wash_units where tenant_id = ? and order_id = ?").get(ctx.tenantId, orderId) as { cycle_units: number } | undefined;
+    const units = unitsRow?.cycle_units ?? EXPECTED_CYCLE_UNITS;
     const usdAmount = WASH_PRICE_MINOR[tier] + units * CYCLE_UNIT_PRICE_MINOR;
     const calculatedAmount = currency === "USD" ? usdAmount : Math.round((usdAmount * ({ EUR: 9_200, AUD: 15_200 } as const)[currency]) / 10_000);
     const amount = state === "captured" ?  calculatedAmount : charge.amount;

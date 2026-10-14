@@ -31,3 +31,11 @@ create table if not exists consumed (
   topic text not null,
   at integer not null
 );
+
+create table if not exists wash_units (
+  tenant_id text not null,
+  order_id text not null,
+  cycle_units integer not null,
+  updated_at integer not null,
+  primary key (tenant_id, order_id)
+);

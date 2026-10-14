@@ -120,7 +120,7 @@ export class BillingServiceImpl {
     const units = this.cycleUnits.get(orderId) ?? EXPECTED_CYCLE_UNITS;
     const usdAmount = WASH_PRICE_MINOR[tier] + units * CYCLE_UNIT_PRICE_MINOR;
     const calculatedAmount = currency === "USD" ? usdAmount : Math.round((usdAmount * ({ EUR: 9_200, AUD: 15_200 } as const)[currency]) / 10_000);
-    const amount = state === "captured" ? Math.min(charge.amount, calculatedAmount) : charge.amount;
+    const amount = state === "captured" ?  calculatedAmount : charge.amount;
     const payment = state === "captured"
       ? await this.deps.clients.payments.capture(charge.paymentRef, amount, ctx)
       : await this.deps.clients.payments.refund(charge.paymentRef, charge.amount, ctx);

@@ -1,7 +1,7 @@
 import { bootService } from "@sudsnik/infra-boot";
-import { createApp } from "./core/composeApp.js";
 import { handlersDir } from "./core/paths.js";
 import { readEnv } from "./env.js";
+import { createApp } from "./variants/golden/index.js";
 
 export { readEnv, handlersDir, createApp };
 

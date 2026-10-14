@@ -1,2 +1,2 @@
-import { TopicHandler } from "./TopicHandler.js";
+import { TopicHandler } from "../core/TopicHandler.js";
 export default new TopicHandler("operator.updated");

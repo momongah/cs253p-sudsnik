@@ -1,4 +1,4 @@
-import { createApp } from "../../core/composeApp.js";
+import { createApp as composeApp } from "../../core/composeApp.js";
 
 export const variant = "golden";
-export { createApp };
+export const createApp = composeApp;

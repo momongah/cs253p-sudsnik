@@ -18,17 +18,16 @@ import { err, newId, ok, sudsnikError, type Result } from "@sudsnik/kernel";
 export class BillingServiceImpl {
   private readonly currencies = new Map<string, "USD" | "EUR" | "AUD">();
   private readonly tiers = new Map<string, "standard" | "priority">();
+  private readonly cycleUnits = new Map<string, number>();
 
   constructor(private readonly db: Db, private readonly outbox: Outbox, private readonly deps: ServiceDeps) {}
 
   async quote(orderId: string, ctx: Ctx): Promise<Result<Quote>> {
-    const order = await this.deps.clients.orders.get(orderId, ctx);
-    if (!order.ok) return order;
     const tier = this.tiers.get(ctx.tenantId) ?? "standard";
     const currency = this.currencies.get(ctx.tenantId) ?? DEFAULT_CURRENCY;
     const usdAmount = WASH_PRICE_MINOR[tier] + EXPECTED_CYCLE_UNITS * CYCLE_UNIT_PRICE_MINOR;
     const amount = currency === "USD" ? usdAmount : Math.round((usdAmount * ({ EUR: 9_200, AUD: 15_200 } as const)[currency]) / 10_000);
-    return ok({ orderId: order.value.orderId, amount, currency, breakdown: { base: WASH_PRICE_MINOR[tier], cycleUnits: EXPECTED_CYCLE_UNITS, tier } });
+    return ok({ orderId, amount, currency, breakdown: { base: WASH_PRICE_MINOR[tier], cycleUnits: EXPECTED_CYCLE_UNITS, tier } });
   }
 
   async authorize(orderId: string, amount: number, ctx: Ctx): Promise<Result<Charge>> {
@@ -79,7 +78,9 @@ export class BillingServiceImpl {
       const topic = webhook.event === "captured" ? "charge.captured" : webhook.event === "refunded" ? "refund.issued" : "charge.failed";
       const payload = webhook.event === "failed"
         ? { orderId: webhook.orderId, chargeId: charge.chargeId, reason: "payments webhook failed" }
-        : { orderId: webhook.orderId, chargeId: charge.chargeId, amount: webhook.amount, currency: webhook.currency };
+        : webhook.event === "captured"
+          ? { orderId: webhook.orderId, chargeId: charge.chargeId, amount: webhook.amount, currency: webhook.currency }
+          : { orderId: webhook.orderId, refundId: newId(), amount: webhook.amount, currency: webhook.currency };
       this.outbox.enqueue(makeEnvelope({ topic, tenantId: ctx.tenantId, occurredAt: webhook.atMs, correlationId: ctx.correlationId, causationId: webhook.id, payload }));
       return { accepted: true, duplicate: false };
     })();
@@ -88,8 +89,8 @@ export class BillingServiceImpl {
 
   async applyEvent(envelope: Envelope): Promise<Result<void>> {
     try {
-      const claimed = this.db.sqlite.prepare("insert or ignore into consumed (envelope_id, topic, at) values (?, ?, ?)").run(envelope.id, envelope.topic, envelope.occurredAt).changes === 1;
-      if (!claimed) return ok(undefined);
+      const alreadyConsumed = this.db.sqlite.prepare("select 1 from consumed where envelope_id = ?").get(envelope.id);
+      if (alreadyConsumed) return ok(undefined);
       if (envelope.topic === "operator.updated") {
         const payload = parsePayload("operator.updated", envelope.payload);
         this.tiers.set(payload.operatorId, payload.pricingTier);
@@ -99,8 +100,10 @@ export class BillingServiceImpl {
         const result = await this.capture(payload.orderId, { tenantId: envelope.tenantId, correlationId: envelope.correlationId });
         if (!result.ok && result.error.code !== "NOT_FOUND") return result;
       } else if (envelope.topic === "wash.completed") {
-        parsePayload("wash.completed", envelope.payload);
+        const payload = parsePayload("wash.completed", envelope.payload);
+        this.cycleUnits.set(payload.orderId, payload.cycleUnits);
       }
+      this.db.sqlite.prepare("insert or ignore into consumed (envelope_id, topic, at) values (?, ?, ?)").run(envelope.id, envelope.topic, envelope.occurredAt);
       return ok(undefined);
     } catch (cause) {
       return err(sudsnikError("INTERNAL", `billing failed to apply ${envelope.topic}`, cause));
@@ -112,15 +115,24 @@ export class BillingServiceImpl {
     if (!charge) return err(sudsnikError("NOT_FOUND", `charge for order ${orderId} was not found`));
     if (charge.state === state) return ok(charge);
     if (!charge.paymentRef) return err(sudsnikError("CONFLICT", `charge for order ${orderId} has no payment reference`));
+    const currency = charge.currency as "USD" | "EUR" | "AUD";
+    const tier = this.tiers.get(ctx.tenantId) ?? "standard";
+    const units = this.cycleUnits.get(orderId) ?? EXPECTED_CYCLE_UNITS;
+    const usdAmount = WASH_PRICE_MINOR[tier] + units * CYCLE_UNIT_PRICE_MINOR;
+    const calculatedAmount = currency === "USD" ? usdAmount : Math.round((usdAmount * ({ EUR: 9_200, AUD: 15_200 } as const)[currency]) / 10_000);
+    const amount = state === "captured" ? Math.min(charge.amount, calculatedAmount) : charge.amount;
     const payment = state === "captured"
-      ? await this.deps.clients.payments.capture(charge.paymentRef, charge.amount, ctx)
+      ? await this.deps.clients.payments.capture(charge.paymentRef, amount, ctx)
       : await this.deps.clients.payments.refund(charge.paymentRef, charge.amount, ctx);
     if (!payment.ok) return payment;
-    const updated = { ...charge, state, updatedAt: this.deps.clock.now() };
+    const updated = { ...charge, amount, state, updatedAt: this.deps.clock.now() };
     this.db.sqlite.transaction(() => {
-      this.db.sqlite.prepare("update charges set state = ?, updated_at = ? where charge_id = ?").run(updated.state, updated.updatedAt, updated.chargeId);
+      this.db.sqlite.prepare("update charges set state = ?, amount = ?, currency = ?, updated_at = ? where charge_id = ?").run(updated.state, updated.amount, updated.currency, updated.updatedAt, updated.chargeId);
       this.addLedger(updated, kind, updated.amount);
-      this.outbox.enqueue(makeEnvelope({ topic: state === "captured" ? "charge.captured" : "refund.issued", tenantId: ctx.tenantId, occurredAt: updated.updatedAt, correlationId: ctx.correlationId, payload: { orderId, chargeId: updated.chargeId, amount: updated.amount, currency: updated.currency } }));
+      const payload = state === "captured"
+        ? { orderId, chargeId: updated.chargeId, amount: updated.amount, currency: updated.currency }
+        : { orderId, refundId: newId(), amount: updated.amount, currency: updated.currency };
+      this.outbox.enqueue(makeEnvelope({ topic: state === "captured" ? "charge.captured" : "refund.issued", tenantId: ctx.tenantId, occurredAt: updated.updatedAt, correlationId: ctx.correlationId, payload }));
     })();
     return ok(updated);
   }

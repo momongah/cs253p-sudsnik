@@ -34,7 +34,7 @@ export class BillingServiceImpl {
     const currency = this.currencies.get(ctx.tenantId) ?? DEFAULT_CURRENCY;
     const payment = await this.deps.clients.payments.authorize({
       orderId, amount, currency, callbackUrl: `${this.deps.env.SUDSNIK_BILLING_URL ?? ""}/callbacks`,
-    }, ctx);
+    }, { ...ctx, idempotencyKey: orderId });
     if (!payment.ok) return payment;
     const charge: Charge = { chargeId: newId(), tenantId: ctx.tenantId, orderId, amount, currency, state: "authorized", paymentRef: payment.value.paymentRef, updatedAt: this.deps.clock.now() };
     this.db.sqlite.transaction(() => {

@@ -127,6 +127,8 @@ export class BillingServiceImpl {
       ? await this.deps.clients.payments.capture(charge.paymentRef, amount, ctx)
       : await this.deps.clients.payments.refund(charge.paymentRef, charge.amount, ctx);
     if (!payment.ok) return payment;
+    const reconciled = this.findCharge(ctx.tenantId, orderId);
+    if (reconciled?.state === state && reconciled.paymentRef === charge.paymentRef) return ok(reconciled);
     const updated = { ...charge, amount, state, updatedAt: this.deps.clock.now() };
     this.db.sqlite.transaction(() => {
       this.db.sqlite.prepare("update charges set state = ?, amount = ?, currency = ?, updated_at = ? where charge_id = ?").run(updated.state, updated.amount, updated.currency, updated.updatedAt, updated.chargeId);

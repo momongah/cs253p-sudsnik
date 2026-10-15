@@ -82,6 +82,7 @@ export class BillingServiceImpl {
       this.outbox.enqueue(makeEnvelope({ topic, tenantId: ctx.tenantId, occurredAt: webhook.atMs, correlationId: ctx.correlationId, causationId: webhook.id, payload }));
       return { accepted: true, duplicate: false };
     })();
+    if (!result.duplicate) await this.outbox.pump();
     return ok(result);
   }
 
@@ -133,6 +134,7 @@ export class BillingServiceImpl {
         : { orderId, refundId: newId(), amount: updated.amount, currency: updated.currency };
       this.outbox.enqueue(makeEnvelope({ topic: state === "captured" ? "charge.captured" : "refund.issued", tenantId: ctx.tenantId, occurredAt: updated.updatedAt, correlationId: ctx.correlationId, payload }));
     })();
+    await this.outbox.pump();
     return ok(updated);
   }
 

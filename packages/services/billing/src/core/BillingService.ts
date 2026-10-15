@@ -72,7 +72,7 @@ export class BillingServiceImpl {
       if (!claimed) return { accepted: true, duplicate: true };
       if (!charge) return { accepted: true, duplicate: false };
       const state: Charge["state"] = webhook.event === "captured" ? "captured" : webhook.event === "refunded" ? "refunded" : "failed";
-      if (charge.state === state && charge.paymentRef === webhook.paymentRef) return { accepted: true, duplicate: false };
+      if (charge.state === state) return { accepted: true, duplicate: false };
       if (this.pendingTransitions.has(this.transitionKey(charge.tenantId, charge.orderId, state))) return { accepted: true, duplicate: false };
       const updated = { ...charge, state, paymentRef: webhook.paymentRef, amount: webhook.amount, currency: webhook.currency, updatedAt: webhook.atMs };
       this.db.sqlite.prepare("update charges set state = ?, payment_ref = ?, amount = ?, currency = ?, updated_at = ? where charge_id = ?").run(updated.state, updated.paymentRef, updated.amount, updated.currency, updated.updatedAt, updated.chargeId);

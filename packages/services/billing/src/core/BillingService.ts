@@ -65,11 +65,13 @@ export class BillingServiceImpl {
 
   async webhook(webhook: PaymentsWebhook, ctx: Ctx): Promise<Result<{ accepted: boolean; duplicate: boolean }>> {
     const result = this.db.sqlite.transaction(() => {
-      const claimed = this.db.sqlite.prepare("insert or ignore into webhook_dedupe (webhook_id, tenant_id, received_at) values (?, ?, ?)").run(webhook.id, ctx.tenantId, this.deps.clock.now()).changes === 1;
+      const charge = this.findWebhookCharge(webhook);
+      const tenantId = charge?.tenantId ?? ctx.tenantId;
+      const claimed = this.db.sqlite.prepare("insert or ignore into webhook_dedupe (webhook_id, tenant_id, received_at) values (?, ?, ?)").run(webhook.id, tenantId, this.deps.clock.now()).changes === 1;
       if (!claimed) return { accepted: true, duplicate: true };
-      const charge = this.findCharge(ctx.tenantId, webhook.orderId);
       if (!charge) return { accepted: true, duplicate: false };
       const state: Charge["state"] = webhook.event === "captured" ? "captured" : webhook.event === "refunded" ? "refunded" : "failed";
+      if (charge.state === state && charge.paymentRef === webhook.paymentRef) return { accepted: true, duplicate: false };
       const updated = { ...charge, state, paymentRef: webhook.paymentRef, amount: webhook.amount, currency: webhook.currency, updatedAt: webhook.atMs };
       this.db.sqlite.prepare("update charges set state = ?, payment_ref = ?, amount = ?, currency = ?, updated_at = ? where charge_id = ?").run(updated.state, updated.paymentRef, updated.amount, updated.currency, updated.updatedAt, updated.chargeId);
       if (webhook.event !== "failed") this.addLedger(updated, webhook.event === "captured" ? "capture" : "refund", webhook.amount);
@@ -79,7 +81,7 @@ export class BillingServiceImpl {
         : webhook.event === "captured"
           ? { orderId: webhook.orderId, chargeId: charge.chargeId, amount: webhook.amount, currency: webhook.currency }
           : { orderId: webhook.orderId, refundId: newId(), amount: webhook.amount, currency: webhook.currency };
-      this.outbox.enqueue(makeEnvelope({ topic, tenantId: ctx.tenantId, occurredAt: webhook.atMs, correlationId: ctx.correlationId, causationId: webhook.id, payload }));
+      this.outbox.enqueue(makeEnvelope({ topic, tenantId, occurredAt: webhook.atMs, correlationId: ctx.correlationId, causationId: webhook.id, payload }));
       return { accepted: true, duplicate: false };
     })();
     if (!result.duplicate) await this.outbox.pump();
@@ -140,6 +142,15 @@ export class BillingServiceImpl {
 
   private findCharge(tenantId: string, orderId: string): Charge | undefined {
     const row = this.db.sqlite.prepare("select * from charges where tenant_id = ? and order_id = ?").get(tenantId, orderId) as Record<string, unknown> | undefined;
+    return this.chargeFromRow(row);
+  }
+
+  private findWebhookCharge(webhook: PaymentsWebhook): Charge | undefined {
+    const row = this.db.sqlite.prepare("select * from charges where payment_ref = ? or order_id = ? order by case when payment_ref = ? then 0 else 1 end limit 1").get(webhook.paymentRef, webhook.orderId, webhook.paymentRef) as Record<string, unknown> | undefined;
+    return this.chargeFromRow(row);
+  }
+
+  private chargeFromRow(row: Record<string, unknown> | undefined): Charge | undefined {
     return row ? {
       chargeId: String(row.charge_id), tenantId: String(row.tenant_id), orderId: String(row.order_id),
       amount: Number(row.amount), currency: String(row.currency), state: row.state as Charge["state"],

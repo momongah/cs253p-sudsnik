@@ -139,14 +139,20 @@ export class BillingServiceImpl {
     const reconciled = this.findCharge(ctx.tenantId, orderId);
     if (reconciled?.state === state && reconciled.paymentRef === charge.paymentRef) return ok(reconciled);
     const updated = { ...charge, amount, state, updatedAt: this.deps.clock.now() };
-    this.db.sqlite.transaction(() => {
-      this.db.sqlite.prepare("update charges set state = ?, amount = ?, currency = ?, updated_at = ? where charge_id = ?").run(updated.state, updated.amount, updated.currency, updated.updatedAt, updated.chargeId);
+    const transitioned = this.db.sqlite.transaction(() => {
+      const result = this.db.sqlite.prepare("update charges set state = ?, amount = ?, currency = ?, updated_at = ? where charge_id = ? and state = ?").run(updated.state, updated.amount, updated.currency, updated.updatedAt, updated.chargeId, charge.state);
+      if (result.changes !== 1) return false;
       this.addLedger(updated, kind, updated.amount);
       const payload = state === "captured"
         ? { orderId, chargeId: updated.chargeId, amount: updated.amount, currency: updated.currency }
         : { orderId, refundId: newId(), amount: updated.amount, currency: updated.currency };
       this.outbox.enqueue(makeEnvelope({ topic: state === "captured" ? "charge.captured" : "refund.issued", tenantId: ctx.tenantId, occurredAt: updated.updatedAt, correlationId: ctx.correlationId, payload }));
+      return true;
     })();
+    if (!transitioned) {
+      const current = this.findCharge(ctx.tenantId, orderId);
+      return current ? ok(current) : err(sudsnikError("NOT_FOUND", `charge for order ${orderId} was not found`));
+    }
     await this.outbox.pump();
     return ok(updated);
   }
@@ -174,6 +180,25 @@ export class BillingServiceImpl {
   }
 
   private addLedger(charge: Charge, kind: LedgerEntry["kind"], amount: number): void {
-    this.db.sqlite.prepare("insert or ignore into ledger (entry_id, tenant_id, order_id, kind, amount, currency, at, ref) values (?, ?, ?, ?, ?, ?, ?, ?)").run(newId(), charge.tenantId, charge.orderId, kind, amount, charge.currency, charge.updatedAt, charge.chargeId);
+    this.db.sqlite.prepare(`
+      insert into ledger (entry_id, tenant_id, order_id, kind, amount, currency, at, ref)
+      select ?, ?, ?, ?, ?, ?, ?, ?
+      where not exists (
+        select 1 from ledger where tenant_id = ? and order_id = ? and kind = ? and ref = ?
+      )
+    `).run(
+      newId(),
+      charge.tenantId,
+      charge.orderId,
+      kind,
+      amount,
+      charge.currency,
+      charge.updatedAt,
+      charge.chargeId,
+      charge.tenantId,
+      charge.orderId,
+      kind,
+      charge.chargeId,
+    );
   }
 }

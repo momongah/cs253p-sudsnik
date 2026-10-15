@@ -18,6 +18,7 @@ import { err, newId, ok, sudsnikError, type Result } from "@sudsnik/kernel";
 export class BillingServiceImpl {
   private readonly currencies = new Map<string, "USD" | "EUR" | "AUD">();
   private readonly tiers = new Map<string, "standard" | "priority">();
+  private readonly pendingTransitions = new Set<string>();
   constructor(private readonly db: Db, private readonly outbox: Outbox, private readonly deps: ServiceDeps) {}
 
   async quote(orderId: string, ctx: Ctx): Promise<Result<Quote>> {
@@ -72,6 +73,7 @@ export class BillingServiceImpl {
       if (!charge) return { accepted: true, duplicate: false };
       const state: Charge["state"] = webhook.event === "captured" ? "captured" : webhook.event === "refunded" ? "refunded" : "failed";
       if (charge.state === state && charge.paymentRef === webhook.paymentRef) return { accepted: true, duplicate: false };
+      if (this.pendingTransitions.has(this.transitionKey(charge.tenantId, charge.orderId, state))) return { accepted: true, duplicate: false };
       const updated = { ...charge, state, paymentRef: webhook.paymentRef, amount: webhook.amount, currency: webhook.currency, updatedAt: webhook.atMs };
       this.db.sqlite.prepare("update charges set state = ?, payment_ref = ?, amount = ?, currency = ?, updated_at = ? where charge_id = ?").run(updated.state, updated.paymentRef, updated.amount, updated.currency, updated.updatedAt, updated.chargeId);
       if (webhook.event !== "failed") this.addLedger(updated, webhook.event === "captured" ? "capture" : "refund", webhook.amount);
@@ -123,9 +125,16 @@ export class BillingServiceImpl {
     const usdAmount = WASH_PRICE_MINOR[tier] + units * CYCLE_UNIT_PRICE_MINOR;
     const calculatedAmount = currency === "USD" ? usdAmount : Math.round((usdAmount * ({ EUR: 9_200, AUD: 15_200 } as const)[currency]) / 10_000);
     const amount = state === "captured" ?  calculatedAmount : charge.amount;
-    const payment = state === "captured"
-      ? await this.deps.clients.payments.capture(charge.paymentRef, amount, ctx)
-      : await this.deps.clients.payments.refund(charge.paymentRef, charge.amount, ctx);
+    const transitionKey = this.transitionKey(ctx.tenantId, orderId, state);
+    this.pendingTransitions.add(transitionKey);
+    let payment: Awaited<ReturnType<ServiceDeps["clients"]["payments"]["capture"]>>;
+    try {
+      payment = state === "captured"
+        ? await this.deps.clients.payments.capture(charge.paymentRef, amount, ctx)
+        : await this.deps.clients.payments.refund(charge.paymentRef, charge.amount, ctx);
+    } finally {
+      this.pendingTransitions.delete(transitionKey);
+    }
     if (!payment.ok) return payment;
     const reconciled = this.findCharge(ctx.tenantId, orderId);
     if (reconciled?.state === state && reconciled.paymentRef === charge.paymentRef) return ok(reconciled);
@@ -158,6 +167,10 @@ export class BillingServiceImpl {
       amount: Number(row.amount), currency: String(row.currency), state: row.state as Charge["state"],
       ...(row.payment_ref === null ? {} : { paymentRef: String(row.payment_ref) }), updatedAt: Number(row.updated_at),
     } : undefined;
+  }
+
+  private transitionKey(tenantId: string, orderId: string, state: Charge["state"]): string {
+    return `${tenantId}:${orderId}:${state}`;
   }
 
   private addLedger(charge: Charge, kind: LedgerEntry["kind"], amount: number): void {

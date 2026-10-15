@@ -76,7 +76,10 @@ export class BillingServiceImpl {
       if (this.pendingTransitions.has(this.transitionKey(charge.tenantId, charge.orderId, state))) return { accepted: true, duplicate: false };
       const updated = { ...charge, state, paymentRef: webhook.paymentRef, amount: webhook.amount, currency: webhook.currency, updatedAt: webhook.atMs };
       this.db.sqlite.prepare("update charges set state = ?, payment_ref = ?, amount = ?, currency = ?, updated_at = ? where charge_id = ?").run(updated.state, updated.paymentRef, updated.amount, updated.currency, updated.updatedAt, updated.chargeId);
-      if (webhook.event !== "failed") this.addLedger(updated, webhook.event === "captured" ? "capture" : "refund", webhook.amount);
+      const ledgerInserted = webhook.event !== "failed"
+        ? this.addLedger(updated, webhook.event === "captured" ? "capture" : "refund", webhook.amount)
+        : false;
+      if (webhook.event !== "failed" && !ledgerInserted) return { accepted: true, duplicate: false };
       const topic = webhook.event === "captured" ? "charge.captured" : webhook.event === "refunded" ? "refund.issued" : "charge.failed";
       const payload = webhook.event === "failed"
         ? { orderId: webhook.orderId, chargeId: charge.chargeId, reason: "payments webhook failed" }
@@ -142,7 +145,8 @@ export class BillingServiceImpl {
     const transitioned = this.db.sqlite.transaction(() => {
       const result = this.db.sqlite.prepare("update charges set state = ?, amount = ?, currency = ?, updated_at = ? where charge_id = ? and state = ?").run(updated.state, updated.amount, updated.currency, updated.updatedAt, updated.chargeId, charge.state);
       if (result.changes !== 1) return false;
-      this.addLedger(updated, kind, updated.amount);
+      const ledgerInserted = this.addLedger(updated, kind, updated.amount);
+      if (!ledgerInserted) return false;
       const payload = state === "captured"
         ? { orderId, chargeId: updated.chargeId, amount: updated.amount, currency: updated.currency }
         : { orderId, refundId: newId(), amount: updated.amount, currency: updated.currency };
@@ -179,8 +183,8 @@ export class BillingServiceImpl {
     return `${tenantId}:${orderId}:${state}`;
   }
 
-  private addLedger(charge: Charge, kind: LedgerEntry["kind"], amount: number): void {
-    this.db.sqlite.prepare(`
+  private addLedger(charge: Charge, kind: LedgerEntry["kind"], amount: number): boolean {
+    const result = this.db.sqlite.prepare(`
       insert into ledger (entry_id, tenant_id, order_id, kind, amount, currency, at, ref)
       select ?, ?, ?, ?, ?, ?, ?, ?
       where not exists (
@@ -200,5 +204,6 @@ export class BillingServiceImpl {
       kind,
       charge.chargeId,
     );
+    return result.changes === 1;
   }
 }

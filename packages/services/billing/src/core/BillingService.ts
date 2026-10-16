@@ -77,7 +77,7 @@ export class BillingServiceImpl {
       const updated = { ...charge, state, paymentRef: webhook.paymentRef, amount: webhook.amount, currency: webhook.currency, updatedAt: webhook.atMs };
       this.db.sqlite.prepare("update charges set state = ?, payment_ref = ?, amount = ?, currency = ?, updated_at = ? where charge_id = ?").run(updated.state, updated.paymentRef, updated.amount, updated.currency, updated.updatedAt, updated.chargeId);
       const ledgerInserted = webhook.event !== "failed"
-        ? this.addLedger(updated, webhook.event === "captured" ? "capture" : "refund", webhook.amount)
+        ? this.addLedger(updated, webhook.event === "captured" ? "capture" : "refund", webhook.event === "refunded" ? -webhook.amount : webhook.amount)
         : false;
       if (webhook.event !== "failed" && !ledgerInserted) return { accepted: true, duplicate: false };
       const topic = webhook.event === "captured" ? "charge.captured" : webhook.event === "refunded" ? "refund.issued" : "charge.failed";
@@ -145,7 +145,7 @@ export class BillingServiceImpl {
     const transitioned = this.db.sqlite.transaction(() => {
       const result = this.db.sqlite.prepare("update charges set state = ?, amount = ?, currency = ?, updated_at = ? where charge_id = ? and state = ?").run(updated.state, updated.amount, updated.currency, updated.updatedAt, updated.chargeId, charge.state);
       if (result.changes !== 1) return false;
-      const ledgerInserted = this.addLedger(updated, kind, updated.amount);
+      const ledgerInserted = this.addLedger(updated, kind, state === "refunded" ? -amount : amount);
       if (!ledgerInserted) return false;
       const payload = state === "captured"
         ? { orderId, chargeId: updated.chargeId, amount: updated.amount, currency: updated.currency }

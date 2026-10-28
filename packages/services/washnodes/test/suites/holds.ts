@@ -54,6 +54,17 @@ export function holdsSuite(variants: Variant[]): void {
       await h.close();
     });
 
+    it("allows only one concurrent acquisition to claim the last washer", async () => {
+      const h = await harness(variant);
+      for (let i = 0; i < WASHERS_PER_NODE - 1; i++) expect((await h.acquire("B", `existing-${i}`)).status).toBe(201);
+
+      const results = await Promise.all([h.acquire("B", "race-a"), h.acquire("B", "race-b")]);
+      expect(results.map((result) => result.status).sort()).toEqual([201, 429]);
+      expect(h.fw.holdsByRef.size).toBe(WASHERS_PER_NODE);
+      expect((await h.status("B")).body.washers.filter((washer) => washer.state === "held")).toHaveLength(WASHERS_PER_NODE);
+      await h.close();
+    });
+
     it("gives up the reservation when the firmware refuses the hold", async () => {
       const h = await harness(variant);
       h.fw.failNext("v2.createHold", { code: "CONFLICT", message: "washer B1 is already held or washing", retryable: false });

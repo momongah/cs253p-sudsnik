@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { HOLD_TTL_MS, WASHERS_PER_NODE } from "@sudsnik/contracts";
+import { sqliteHoldStore } from "../../src/adapters/db/holdStore.js";
+import { sqliteWasherRepo } from "../../src/adapters/db/washerRepo.js";
 import { harness, type Variant } from "../helpers.js";
 
 
@@ -81,6 +83,16 @@ export function holdsSuite(variants: Variant[]): void {
       expect(second.json()).toEqual(first.json());
       expect(second.headers["idempotent-replayed"]).toBe("true");
       expect(await h.events("hold.acquired")).toHaveLength(1);
+      await h.close();
+    });
+
+    it("rejects a transition that uses a stale hold version", async () => {
+      const h = await harness(variant);
+      const hold = (await h.acquire("B", "o1")).body;
+      const store = sqliteHoldStore(h.app.washnodes.db, sqliteWasherRepo(h.app.washnodes.db));
+      expect((await store.release(hold.holdId, hold.version, "first", h.deps.clock.now())).ok).toBe(true);
+      const stale = await store.consume(hold.holdId, hold.version, h.deps.clock.now());
+      expect(stale).toMatchObject({ ok: false, error: { code: "CONFLICT" } });
       await h.close();
     });
   });

@@ -11,7 +11,7 @@ export function memoryHoldStore(washers: WasherRepo): HoldStore {
       const ref = firmwareRefOf(input.firmwareRef, `hold for order ${input.orderId}`);
       if (!ref.ok) return ref;
       const hold: StoredHold = {
-        holdId: input.holdId ?? newId(),
+        holdId: washers.get(input.washerId)?.holdId ?? newId(),
         tenantId: input.tenantId,
         nodeId: input.nodeId,
         washerId: input.washerId,

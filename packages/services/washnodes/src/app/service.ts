@@ -54,7 +54,7 @@ export function createService(d: ServiceDeps): WashnodesUseCases {
     }
     const nowMs = now();
     const ttlMs = Math.max(0, Math.min(HOLD_TTL_MS, fw.value.expiresAt - nowMs));
-    const stored = await d.holds.acquire({ holdId, nodeId, washerId: washer.washerId, orderId, tenantId: ctx.tenantId, nowMs, ttlMs, firmwareRef: fw.value.ref });
+    const stored = await d.holds.acquire({ nodeId, washerId: washer.washerId, orderId, tenantId: ctx.tenantId, nowMs, ttlMs, firmwareRef: fw.value.ref });
     if (!stored.ok) {
       await adapter.release(washer.washerId, fw.value.ref, ctx);
       d.washers.free(washer.washerId, holdId);

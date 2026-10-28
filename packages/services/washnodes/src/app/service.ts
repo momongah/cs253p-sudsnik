@@ -39,19 +39,26 @@ function ownHold(r: Result<Hold>, ctx: Ctx, holdId: string): Result<Hold> {
 
 export function createService(d: ServiceDeps): WashnodesUseCases {
   const now = () => d.clock.now();
+  const pendingReservations = new Set<string>();
 
   async function acquireHold(nodeId: string, orderId: string, ctx: Ctx): Promise<Result<Hold>> {
     if (!isNodeId(nodeId)) return err(sudsnikError("NOT_FOUND", `no node ${nodeId}`));
     const washer = d.washers.pickIdle(nodeId);
-    if (!washer) return err(sudsnikError("QUOTA", `no idle washer at node ${nodeId}`));
+    if (!washer) {
+      return pendingReservations.has(nodeId)
+        ? err(sudsnikError("CONFLICT", `washer at node ${nodeId} was claimed concurrently`))
+        : err(sudsnikError("QUOTA", `no idle washer at node ${nodeId}`));
+    }
     const holdId = newId();
     if (!d.washers.reserve(washer.washerId, holdId)) {
       return err(sudsnikError("CONFLICT", `washer ${washer.washerId} was claimed concurrently`));
     }
+    pendingReservations.add(nodeId);
     const adapter = d.firmware[washer.firmware];
     const fw = await adapter.hold(washer.washerId, ctx);
     if (!fw.ok) {
       d.washers.free(washer.washerId, holdId);
+      pendingReservations.delete(nodeId);
       return fw;
     }
     const nowMs = now();
@@ -60,9 +67,11 @@ export function createService(d: ServiceDeps): WashnodesUseCases {
     if (!stored.ok) {
       await adapter.release(washer.washerId, fw.value.ref, ctx);
       d.washers.free(washer.washerId, holdId);
+      pendingReservations.delete(nodeId);
       return stored;
     }
     const hold = stored.value;
+    pendingReservations.delete(nodeId);
     d.publish.emit("hold.acquired", { tenantId: ctx.tenantId, correlationId: ctx.correlationId }, { holdId: hold.holdId, washerId: hold.washerId, nodeId, orderId, expiresAt: hold.expiresAt });
     return ok(hold);
   }

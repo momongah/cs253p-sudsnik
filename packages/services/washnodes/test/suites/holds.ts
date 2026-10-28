@@ -59,7 +59,7 @@ export function holdsSuite(variants: Variant[]): void {
       for (let i = 0; i < WASHERS_PER_NODE - 1; i++) expect((await h.acquire("B", `existing-${i}`)).status).toBe(201);
 
       const results = await Promise.all([h.acquire("B", "race-a"), h.acquire("B", "race-b")]);
-      expect(results.map((result) => result.status).sort()).toEqual([201, 429]);
+      expect(results.map((result) => result.status).sort()).toEqual([201, 409]);
       expect(h.fw.holdsByRef.size).toBe(WASHERS_PER_NODE);
       expect((await h.status("B")).body.washers.filter((washer) => washer.state === "held")).toHaveLength(WASHERS_PER_NODE);
       await h.close();

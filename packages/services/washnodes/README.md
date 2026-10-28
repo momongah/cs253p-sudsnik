@@ -18,7 +18,7 @@ The hold store is SQLite-backed and keyed by hold id (`src/adapters/db/holdStore
 and expiry run in transactions, release and consume check the expected version, and holds survive process restarts.
 Inventory, cycles, nodes, reports and the dedupe keys are indexed SQLite reads through `src/adapters/db/`.
 
-## Tables (`washnodes.sqlite`, `migrations/0001_inventory.sql`)
+## Tables (`washnodes.sqlite`, `migrations/0001_inventory.sql`, `migrations/0002_one_held_hold_per_washer.sql`)
 
 The migration carries the schema only. `createApp` seeds nodes and washers from canon (`NODES`, `WASHERS_PER_NODE`,
 `NODE_FIRMWARE`, `washerId`) through `src/adapters/db/fleet.ts` before reporting ready: it inserts what is missing and
@@ -28,7 +28,7 @@ leaves existing rows alone, so the fleet follows a canon change with no migratio
 |---|---|
 | `washers` | One row per washer canon names: node, index in node, firmware, `state` (idle, held, washing, faulted), `maintenance`, current `hold_id` |
 | `nodes` | `in_contact` from the last poll or callback outcome |
-| `holds` | The hold schema, `version` for optimistic concurrency and `firmware_ref` (v1 token or v2 hold id) included; the hold store keeps its holds in the process and writes no row |
+| `holds` | Durable hold rows with one active held hold per washer, `version` for optimistic concurrency, and `firmware_ref` (v1 token or v2 hold id) |
 | `cycles` | One row per firmware cycle: order, washer, `attempt`, outcome, `retry_pending` |
 | `washer_reports` | Anomaly reports and their triage action against the washer that washed the order |
 | `handled_events`, `washer_callbacks` | Dedupe keys: envelope ids and washer callback ids |

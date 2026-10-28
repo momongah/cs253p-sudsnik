@@ -9,7 +9,7 @@ Layout is hexagonal: `src/domain/` (rules, no imports from infra), `src/ports/` 
 (firmware `v1.ts` and `v2.ts`, Drizzle `db/schema.ts` and the repositories over it, the SQLite hold store, the outbox
 publisher), `src/app/` (use cases, cycle flow, reports, the composition root `compose.ts`), `src/http/routes.ts`,
 `src/handlers/` (one per consumed topic), `src/runtime.ts` (how a directory-scanned handler reaches the app), and
-`src/variants/memory/`, which is the storage `compose.ts` is handed. `src/index.ts` selects it.
+`src/variants/sqlite/`, which is the durable storage `compose.ts` is handed. `src/index.ts` selects it.
 
 Routes: `POST /holds`, `POST /holds/:holdId/release`, `POST /holds/:holdId/start`, `GET /nodes/:nodeId`, and
 `POST /callbacks/washer`, which is where firmware v2 reports a cycle.

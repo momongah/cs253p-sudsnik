@@ -116,7 +116,7 @@ done
 4000 {"service":"gateway","version":"1.0.0","contractsVersion":"1.0.0","variant":"v1-only","gitSha":"unknown"}
 4001 {"service":"orders","version":"1.0.0","contractsVersion":"1.0.0","variant":"cancel-noop","gitSha":"unknown"}
 4002 {"service":"dispatch","version":"1.0.0","contractsVersion":"1.0.0","variant":"naive","gitSha":"unknown"}
-4003 {"service":"washnodes","version":"1.0.0","contractsVersion":"1.0.0","variant":"memory","gitSha":"unknown"}
+4003 {"service":"washnodes","version":"1.0.0","contractsVersion":"1.0.0","variant":"sqlite","gitSha":"unknown"}
 4004 (no answer)
 
 4005 {"service":"tracking","version":"1.0.0","contractsVersion":"1.0.0","variant":"naive","gitSha":"unknown"}

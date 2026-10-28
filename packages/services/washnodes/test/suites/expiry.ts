@@ -47,5 +47,35 @@ export function expirySuite(variants: Variant[]): void {
       expect(await h.events("hold.expired")).toHaveLength(0);
       await h.close();
     });
+
+    it("preserves a live hold across restart and expires it once afterward", async () => {
+      const first = await harness(variant);
+      const hold = (await first.acquire("B", "restart-order")).body;
+      const dataDir = first.deps.dataDir;
+      await first.close();
+
+      const restarted = await harness(variant, undefined, dataDir);
+      expect((await restarted.status("B")).body.washers.find((washer) => washer.washerId === hold.washerId)).toMatchObject({
+        state: "held",
+        holdId: hold.holdId,
+      });
+      expect((await restarted.release(hold.holdId, "restart cleanup")).status).toBe(200);
+      expect((await restarted.status("B")).body.washers.find((washer) => washer.washerId === hold.washerId)?.state).toBe("idle");
+      await restarted.close();
+
+      const expiryFirst = await harness(variant);
+      const expiring = (await expiryFirst.acquire("B", "restart-expiry")).body;
+      const expiryDataDir = expiryFirst.deps.dataDir;
+      await expiryFirst.close();
+
+      const expiryRestart = await harness(variant, undefined, expiryDataDir);
+      await expiryRestart.advance(expiring.expiresAt);
+      expect((await expiryRestart.events("hold.expired")).map((event) => event.payload)).toEqual([
+        { holdId: expiring.holdId, washerId: expiring.washerId, orderId: "restart-expiry" },
+      ]);
+      expect(await expiryRestart.events("hold.expired")).toHaveLength(1);
+      expect((await expiryRestart.status("B")).body.washers.find((washer) => washer.washerId === expiring.washerId)?.state).toBe("idle");
+      await expiryRestart.close();
+    });
   });
 }

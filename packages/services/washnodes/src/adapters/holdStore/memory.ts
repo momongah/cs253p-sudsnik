@@ -26,17 +26,19 @@ export function memoryHoldStore(washers: WasherRepo): HoldStore {
       holds.set(hold.holdId, hold);
       return ok(hold);
     },
-    release: async (holdId, expectedVersion, _reason, _nowMs) => {
+    release: async (holdId, expectedVersion, _reason, nowMs) => {
       const guarded = guardTransition(holds.get(holdId), holdId, expectedVersion);
       if (!guarded.ok) return guarded;
+      if (guarded.value.expiresAt <= nowMs) return err(sudsnikError("CONFLICT", `hold ${holdId} expired at ${guarded.value.expiresAt}`));
       const next: StoredHold = { ...guarded.value, state: "released", version: guarded.value.version + 1 };
       holds.set(holdId, next);
       washers.free(next.washerId, holdId);
       return ok(next);
     },
-    consume: async (holdId, expectedVersion, _nowMs) => {
+    consume: async (holdId, expectedVersion, nowMs) => {
       const guarded = guardTransition(holds.get(holdId), holdId, expectedVersion);
       if (!guarded.ok) return guarded;
+      if (guarded.value.expiresAt <= nowMs) return err(sudsnikError("CONFLICT", `hold ${holdId} expired at ${guarded.value.expiresAt}`));
       const next: StoredHold = { ...guarded.value, state: "consumed", version: guarded.value.version + 1 };
       holds.set(holdId, next);
       washers.startWashing(next.washerId);

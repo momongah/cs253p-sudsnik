@@ -44,15 +44,17 @@ export function sqliteHoldStore(db: Db, washers: WasherRepo): HoldStore {
       const current = getRow(holdId);
       const guarded = guardTransition(current ? toHold(current) : undefined, holdId, expectedVersion);
       if (!guarded.ok) return guarded;
+      if (guarded.value.expiresAt <= nowMs) return err(sudsnikError("CONFLICT", `hold ${holdId} expired at ${guarded.value.expiresAt}`));
       const next = { ...guarded.value, state, version: guarded.value.version + 1 };
       const updated = db.write(
-        "update holds set state = ?, version = ?, ended_at = ?, reason = ? where hold_id = ? and state = 'held' and version = ?",
+        "update holds set state = ?, version = ?, ended_at = ?, reason = ? where hold_id = ? and state = 'held' and version = ? and expires_at > ?",
         state,
         next.version,
         nowMs,
         reason ?? null,
         holdId,
         expectedVersion,
+        nowMs,
       );
       if (updated.changes !== 1) return err(sudsnikError("CONFLICT", `hold ${holdId} changed while transitioning`));
       if (state === "consumed") washers.startWashing(next.washerId);

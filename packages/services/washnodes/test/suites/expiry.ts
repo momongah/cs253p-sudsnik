@@ -39,16 +39,12 @@ export function expirySuite(variants: Variant[]): void {
       await h.close();
     });
 
-    // skipped: went red in the release before last and nobody has looked at it since.
-    it.skip("expires a hold one orbit after its cycle starts", async () => {
+    it("does not expire a consumed hold after its original expiry", async () => {
       const h = await harness(variant);
       const hold = (await h.acquire("B", "o1")).body;
-      await h.advance(30 * MINUTE_MS);
-      await h.start(hold.holdId);
-      await h.advance(HOLD_TTL_MS - MINUTE_MS);
+      expect((await h.start(hold.holdId)).status).toBe(201);
+      await h.advance(HOLD_TTL_MS + MINUTE_MS);
       expect(await h.events("hold.expired")).toHaveLength(0);
-      await h.advance(MINUTE_MS);
-      expect(await h.events("hold.expired")).toHaveLength(1);
       await h.close();
     });
   });

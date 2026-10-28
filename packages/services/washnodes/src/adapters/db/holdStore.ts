@@ -65,11 +65,12 @@ export function sqliteHoldStore(db: Db, washers: WasherRepo): HoldStore {
       const firmwareRef = input.firmwareRef;
       if (!firmwareRef) return err(sudsnikError("INTERNAL", `hold for order ${input.orderId} has no firmware reference`));
       return db.transaction(() => {
-        const holdId = newId();
+        const holdId = input.holdId ?? newId();
         const reserved = db.write(
-          "update washers set state = 'held', hold_id = ? where washer_id = ? and state = 'idle' and maintenance = 0",
+          "update washers set state = 'held', hold_id = ? where washer_id = ? and maintenance = 0 and (state = 'idle' or (state = 'held' and hold_id = ?))",
           holdId,
           input.washerId,
+          holdId,
         );
         if (reserved.changes !== 1) return err(sudsnikError("QUOTA", `washer ${input.washerId} is no longer idle`));
         const hold: StoredHold = {
